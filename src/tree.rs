@@ -13,7 +13,7 @@ use crate::char_stream::InputData;
 use crate::int_stream::EOF;
 use crate::interval_set::Interval;
 use crate::parser::ParserNodeType;
-use crate::parser_rule_context::{ParserRuleContext, RuleContextExt};
+use crate::parser_rule_context::ParserRuleContext;
 use crate::recognizer::Recognizer;
 use crate::rule_context::{CustomRuleContext, RuleContext};
 use crate::token::Token;
@@ -192,10 +192,12 @@ impl<'input, Node: ParserNodeType<'input>, Listener: ParseTreeListener<'input, N
     }
 }
 
-impl<'input, Node: ParserNodeType<'input>, Visitor: ParseTreeVisitor<'input, Node> + ?Sized>
-    Visitable<Visitor> for TerminalNode<'input, Node>
+impl<'input, Node: ParserNodeType<'input>, Visitor: ParseTreeVisitor<'input, Node>>
+    Visitable<'input, Node, Visitor> for TerminalNode<'input, Node>
+where
+    <Node as ParserNodeType<'input>>::Type: VisitableDyn<'input, Node, Visitor>,
 {
-    fn accept(&self, visitor: &mut Visitor) { visitor.visit_terminal(self) }
+    fn accept(&self, visitor: &mut Visitor) -> Option<Visitor::Ret> { visitor.visit_terminal(self) }
 }
 
 /// # Error Leaf
@@ -212,57 +214,70 @@ impl<'input, Node: ParserNodeType<'input>, Listener: ParseTreeListener<'input, N
     }
 }
 
-impl<'input, Node: ParserNodeType<'input>, Visitor: ParseTreeVisitor<'input, Node> + ?Sized>
-    Visitable<Visitor> for ErrorNode<'input, Node>
+impl<'input, Node: ParserNodeType<'input>, Visitor: ParseTreeVisitor<'input, Node>>
+    Visitable<'input, Node, Visitor> for ErrorNode<'input, Node>
+where
+    <Node as ParserNodeType<'input>>::Type: VisitableDyn<'input, Node, Visitor>,
 {
-    fn accept(&self, visitor: &mut Visitor) { visitor.visit_error_node(self) }
+    fn accept(&self, visitor: &mut Visitor) -> Option<Visitor::Ret> {
+        visitor.visit_error_node(self)
+    }
 }
 
 /// Base interface for visiting over syntax tree
-pub trait ParseTreeVisitor<'input, Node: ParserNodeType<'input>>:
-    VisitChildren<'input, Node>
-{
-    /// Called on terminal(leaf) node
-    fn visit_terminal(&mut self, _node: &TerminalNode<'input, Node>) {}
-    /// Called on error node
-    fn visit_error_node(&mut self, _node: &ErrorNode<'input, Node>) {}
-    /// Implement this only if you want to change children visiting algorithm
-    fn visit_children(&mut self, node: &Node::Type) { self.visit_children_inner(node) }
-}
-
-/// Workaround for default recursive children visiting
-///
-/// Already blanket implemented for all visitors.
-/// To override it you would need to implement `ParseTreeVisitor::visit_children`
-pub trait VisitChildren<'input, Node: ParserNodeType<'input>> {
-    #[doc(hidden)]
-    fn visit_children_inner(&mut self, node: &Node::Type);
-}
-
-impl<'input, Node, T> VisitChildren<'input, Node> for T
+pub trait ParseTreeVisitor<'input, Node: ParserNodeType<'input>>
 where
-    Node: ParserNodeType<'input>,
-    T: ParseTreeVisitor<'input, Node> + ?Sized,
-    // for<'a> &'a mut Self: CoerceUnsized<&'a mut Node::Visitor>,
-    Node::Type: VisitableDyn<T>,
+    Node::Type: VisitableDyn<'input, Node, Self>,
 {
-    #[inline(always)]
-    fn visit_children_inner(&mut self, node: &Node::Type) { node.accept_children(self) }
+    /// Return type of visit methods
+    type Ret;
+    /// Called on terminal(leaf) node
+    fn visit_terminal(&mut self, _node: &TerminalNode<'input, Node>) -> Option<Self::Ret> { None }
+    /// Called on error node
+    fn visit_error_node(&mut self, _node: &ErrorNode<'input, Node>) -> Option<Self::Ret> { None }
+
+    /// Implement this only if you want to change children visiting algorithm
+    fn visit_children(&mut self, node: &Node::Type) -> Option<Self::Ret> {
+        let mut result: Option<Self::Ret> = None;
+        for child in node.get_children() {
+            let child_result = (*child).accept_dyn(self);
+            result = self.aggregate_result(result, child_result);
+        }
+        return result;
+    }
+
+    /// Algorithm for combining two results from children
+    fn aggregate_result(
+        &mut self,
+        _aggregate: Option<Self::Ret>,
+        next_result: Option<Self::Ret>,
+    ) -> Option<Self::Ret> {
+        return next_result;
+    }
 }
 
 /// Types that can accept particular visitor
 /// ** Usually implemented only in generated parser **
-pub trait Visitable<Vis: ?Sized> {
+pub trait Visitable<'input, Node: ParserNodeType<'input>, Vis: ParseTreeVisitor<'input, Node>>
+where
+    <Node as ParserNodeType<'input>>::Type: VisitableDyn<'input, Node, Vis>,
+{
     /// Calls corresponding visit callback on visitor`Vis`
-    fn accept(&self, _visitor: &mut Vis) {
+    fn accept(&self, _visitor: &mut Vis) -> Option<Vis::Ret> {
         unreachable!("should have been properly implemented by generated context when reachable")
     }
 }
 
 // workaround trait for accepting sized visitor on rule context trait object
 #[doc(hidden)]
-pub trait VisitableDyn<Vis: ?Sized> {
-    fn accept_dyn(&self, _visitor: &mut Vis) {
+pub trait VisitableDyn<
+    'input,
+    Node: ParserNodeType<'input>,
+    Vis: ParseTreeVisitor<'input, Node> + ?Sized,
+> where
+    <Node as ParserNodeType<'input>>::Type: VisitableDyn<'input, Node, Vis>,
+{
+    fn accept_dyn(&self, _visitor: &mut Vis) -> Option<Vis::Ret> {
         unreachable!("should have been properly implemented by generated context when reachable")
     }
 }

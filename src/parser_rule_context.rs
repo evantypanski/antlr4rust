@@ -14,7 +14,7 @@ use crate::parser::ParserNodeType;
 use crate::rule_context::{BaseRuleContext, CustomRuleContext, RuleContext};
 use crate::token::Token;
 use crate::token_factory::TokenFactory;
-use crate::tree::{ParseTree, ParseTreeVisitor, TerminalNode, Tree, VisitableDyn};
+use crate::tree::{ParseTree, TerminalNode, Tree};
 
 /// Syntax tree node for particular parser rule.
 ///
@@ -126,12 +126,6 @@ pub trait RuleContextExt<'input>: ParserRuleContext<'input> {
         Z: ParserRuleContext<'input, Ctx = Self::Ctx, TF = Self::TF> + ?Sized + 'input,
         Self::Ctx: ParserNodeType<'input, Type = Z>,
         Rc<Self>: CoerceUnsized<Rc<Z>>;
-
-    #[doc(hidden)]
-    fn accept_children<V>(&self, visitor: &mut V)
-    where
-        V: ParseTreeVisitor<'input, Self::Ctx> + ?Sized,
-        <Self::Ctx as ParserNodeType<'input>>::Type: VisitableDyn<V>;
 }
 
 impl<'input, T: ParserRuleContext<'input> + ?Sized + 'input> RuleContextExt<'input> for T {
@@ -172,15 +166,6 @@ impl<'input, T: ParserRuleContext<'input> + ?Sized + 'input> RuleContextExt<'inp
 
         result.push(']');
         return result;
-    }
-
-    fn accept_children<V>(&self, visitor: &mut V)
-    where
-        V: ParseTreeVisitor<'input, Self::Ctx> + ?Sized,
-        <Self::Ctx as ParserNodeType<'input>>::Type: VisitableDyn<V>,
-    {
-        self.get_children()
-            .for_each(|child| child.accept_dyn(visitor))
     }
 }
 
